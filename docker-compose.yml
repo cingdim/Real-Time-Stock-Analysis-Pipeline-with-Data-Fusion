@@ -4,9 +4,17 @@ services:
     ports:
       - "8002:8002"
 
+  price-service:
+    build: ./price_service
+    ports:
+      - "8001:8001"
+    environment:
+      TICKERS: "AAPL, AMZN, META, NVDA, TSLA"
+      INTERVAL: "5m"
   streamlit-service:
     build: ./streamlit_app
     ports:
       - "8501:8501"
     depends_on:
+      - price-service
       - fundamental-service
