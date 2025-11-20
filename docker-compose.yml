@@ -1,20 +1,64 @@
 services:
-  fundamental-service:
-    build: ./fundamental_service
-    ports:
-      - "8002:8002"
-
+  # Port 8001 everywhere
   price-service:
     build: ./price_service
+    container_name: price-service
     ports:
       - "8001:8001"
     environment:
-      TICKERS: "AAPL, AMZN, META, NVDA, TSLA"
+      TICKERS: "AAPL,AMZN,META,NVDA,TSLA"
       INTERVAL: "5m"
-  streamlit-service:
-    build: ./streamlit_app
+      CHECK_INTERVAL: "60"
+    volumes:
+      - price-data:/app/data
+    networks:
+      - stock-network
+
+  # Port 8002 everywhere
+  fundamental-service:
+    build: ./fundamental_service
+    container_name: fundamental-service
     ports:
-      - "8501:8501"
+      - "8002:8002"
+    volumes:
+      - fundamental-data:/app/data
+    networks:
+      - stock-network
+
+  # Port 8003 everywhere
+  analysis-service:
+    build: ./analysis_dashboard
+    container_name: analysis-service
+    ports:
+      - "8003:8003"
     depends_on:
       - price-service
       - fundamental-service
+    volumes:
+      - analysis-data:/app/data
+    networks:
+      - stock-network
+
+  # Port 8501 for Streamlit
+  streamlit-service:
+    build: ./streamlit_app
+    container_name: streamlit-service
+    ports:
+      - "8501:8501"
+    depends_on:
+      - analysis-service
+      - price-service
+    environment:
+      ANALYSIS_SERVICE_URL: "http://analysis-service:8003"
+      PRICE_SERVICE_URL: "http://price-service:8001"
+    networks:
+      - stock-network
+
+networks:
+  stock-network:
+    driver: bridge
+
+volumes:
+  price-data:
+  fundamental-data:
+  analysis-data:
