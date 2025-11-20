@@ -227,7 +227,7 @@ def compute_rsi(closes, period=14):
 # ---------------------------------------------------------
 def get_fused_data(symbol: str):
     symbol = symbol.upper()
-    price_data = []
+    price_data = {}
     market_cap = None
     rsi_value = None
     errors = []
@@ -237,8 +237,7 @@ def get_fused_data(symbol: str):
     try:
         price_resp = requests.get(f"{PRICE_SERVICE_URL}/{symbol}", timeout=5)
         if price_resp.status_code == 200:
-            data = price_resp.json().get("data", [])
-            price_data = data if isinstance(data, list) else [data]
+            price_data = price_resp.json()
         else:
             errors.append(f"Price service returned: {price_resp.status_code}")
     except Exception as e:
@@ -275,7 +274,18 @@ def get_fused_data(symbol: str):
         print(f"RSI error: {e}")
 
     # Save complete snapshot
-    latest_price = price_data[-1] if price_data else None
+    latest_price = None
+    if price_data:
+        current_day = price_data.get("current_day", {}) or {}
+        previous_day = price_data.get("previous_day", {}) or {}
+        current_candles = current_day.get("candles", []) or []
+        previous_candles = previous_day.get("candles", []) or []
+        
+        if current_candles:
+            latest_price = current_candles[-1]
+        elif previous_candles:
+            latest_price = previous_candles[-1]
+
     if latest_price:
         save_fused_snapshot(
             symbol,
@@ -289,7 +299,8 @@ def get_fused_data(symbol: str):
     return {
         "symbol": symbol,
         "price": latest_price,
-        "price_history": price_data,
+        "price_history": price_data.get("current_day", {}).get("candles", []) if price_data else [],
+        "price_days": price_data if price_data else None,
         "market_cap": market_cap,
         "indicator": {
             "rsi14": rsi_value

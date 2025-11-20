@@ -10,7 +10,7 @@ import os
 # Configuration - Read from environment variables
 ANALYSIS_SERVICE_URL = os.getenv("ANALYSIS_SERVICE_URL", "http://analysis-service:8003")
 PRICE_SERVICE_URL = os.getenv("PRICE_SERVICE_URL", "http://price-service:8001")
-P
+
 st.set_page_config(
     page_title="Stock Market Analytics Dashboard",
     page_icon="📈",
@@ -29,6 +29,16 @@ selected_symbol = st.sidebar.selectbox("Select Stock Symbol", symbols)
 # Historical data range
 st.sidebar.header("Historical Data")
 history_limit = st.sidebar.slider("Data Points to Show", 10, 200, 50)
+
+# SMA configuration
+st.sidebar.header("Technical Indicators")
+sma_window = st.sidebar.slider(
+    "SMA Window (candles)",
+    min_value=5,
+    max_value=60,
+    value=14,
+    help="Number of recent candles used when computing the simple moving average."
+)
 
 # Refresh button
 if st.sidebar.button("🔄 Refresh Data"):
@@ -51,6 +61,20 @@ def fetch_fused_data(symbol):
             return None
     except Exception as e:
         st.error(f"Connection error to analysis service: {str(e)}")
+        return None
+
+@st.cache_data(ttl=30)
+def fetch_price_days(symbol):
+    try:
+        url = f"{PRICE_SERVICE_URL}/prices/{symbol}"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"Price service error for {symbol}: {response.status_code}")
+            return None
+    except Exception as e:
+        st.error(f"Connection error to price service: {str(e)}")
         return None
 
 @st.cache_data(ttl=30)
@@ -103,6 +127,18 @@ def fetch_complete_history(symbol, limit=100):
         print(f"Complete history error: {e}")
         return []
 
+
+def build_day_dataframe(day_data, window):
+    candles = (day_data or {}).get("candles", []) or []
+    if not candles:
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(candles)
+    df['timestamp_local'] = pd.to_datetime(df['timestamp_local'])
+    df = df.sort_values('timestamp_local').reset_index(drop=True)
+    df['SMA'] = df['close'].rolling(window=window, min_periods=1).mean()
+    return df
+
 # Service health check
 st.sidebar.subheader("🏥 Service Status")
 
@@ -130,13 +166,51 @@ except Exception as e:
 # Get data
 data = fetch_fused_data(selected_symbol)
 all_prices = fetch_all_prices()
+price_days = fetch_price_days(selected_symbol)
 rsi_history = fetch_rsi_history(selected_symbol, history_limit)
 marketcap_history = fetch_marketcap_history(selected_symbol, history_limit)
 complete_history = fetch_complete_history(selected_symbol, history_limit)
 
+current_day_df = build_day_dataframe(price_days.get("current_day"), sma_window) if price_days else pd.DataFrame()
+previous_day_df = build_day_dataframe(price_days.get("previous_day"), sma_window) if price_days else pd.DataFrame()
+
+day_options = []
+if not current_day_df.empty:
+    day_options.append("Today")
+if not previous_day_df.empty:
+    day_options.append("Previous Day")
+
+selected_day_label = None
+if day_options:
+    default_index = 0
+    if "Today" not in day_options and "Previous Day" in day_options:
+        default_index = day_options.index("Previous Day")
+    selected_day_label = st.radio("Select session to view", day_options, index=default_index, horizontal=True)
+
+selected_day_df = pd.DataFrame()
+if selected_day_label == "Today":
+    selected_day_df = current_day_df
+elif selected_day_label == "Previous Day":
+    selected_day_df = previous_day_df
+elif not day_options:
+    st.warning("No intraday price data is available yet for this symbol.")
+
 if data and data.get("price"):
+    
+    chart_label = None
+    chart_df = pd.DataFrame()
+    if not selected_day_df.empty:
+        chart_df = selected_day_df
+        chart_label = selected_day_label or "Today"
+    elif not current_day_df.empty:
+        chart_df = current_day_df
+        chart_label = "Today"
+    elif not previous_day_df.empty:
+        chart_df = previous_day_df
+        chart_label = "Previous Day"
+    
     # Display key metrics at the top
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     latest_price = data.get("price")
     if latest_price:
@@ -153,28 +227,35 @@ if data and data.get("price"):
                 st.metric("Market Cap", f"${market_cap/1e9:.2f}B")
             else:
                 st.metric("Market Cap", "N/A")
+        with col5:
+            if not chart_df.empty and 'SMA' in chart_df:
+                latest_sma = chart_df['SMA'].iloc[-1]
+                if pd.notna(latest_sma):
+                    st.metric(f"SMA ({sma_window})", f"{latest_sma:.2f}")
+                else:
+                    st.metric(f"SMA ({sma_window})", "N/A")
+            else:
+                st.metric(f"SMA ({sma_window})", "N/A")
     
     st.markdown("---")
     
     # === VISUALIZATION 1: Price History with Candlestick Chart ===
     st.subheader("📊 Visualization 1: Price Movement & Volume Analysis")
     
-    price_history = data.get("price_history", [])
-    if price_history and len(price_history) > 0:
-        # Create DataFrame
-        df = pd.DataFrame(price_history)
-        df['timestamp_local'] = pd.to_datetime(df['timestamp_local'])
+    if price_days and price_days.get("market_status") == "closed" and not current_day_df.empty:
+        st.info("Market is closed. Showing the full set of today's candles.")
+    
+    if not chart_df.empty:
+        df = chart_df.copy()
         
-        # Create candlestick chart with volume
         fig1 = make_subplots(
             rows=2, cols=1,
             shared_xaxes=True,
             vertical_spacing=0.03,
             row_heights=[0.7, 0.3],
-            subplot_titles=(f'{selected_symbol} Price Action', 'Trading Volume')
+            subplot_titles=(f'{selected_symbol} Price Action ({chart_label})', 'Trading Volume')
         )
         
-        # Candlestick
         fig1.add_trace(
             go.Candlestick(
                 x=df['timestamp_local'],
@@ -187,7 +268,6 @@ if data and data.get("price"):
             row=1, col=1
         )
         
-        # Volume bars
         colors = ['red' if close < open else 'green' 
                   for close, open in zip(df['close'], df['open'])]
         fig1.add_trace(
@@ -201,6 +281,17 @@ if data and data.get("price"):
             row=2, col=1
         )
         
+        fig1.add_trace(
+            go.Scatter(
+                x=df['timestamp_local'],
+                y=df['SMA'],
+                mode='lines',
+                name=f"SMA ({sma_window})",
+                line=dict(color='orange', width=2)
+            ),
+            row=1, col=1
+        )
+        
         fig1.update_layout(
             height=600,
             xaxis_rangeslider_visible=False,
@@ -212,7 +303,7 @@ if data and data.get("price"):
         
         st.plotly_chart(fig1, use_container_width=True)
     else:
-        st.warning("No price history available")
+        st.warning("No price history available for the selected day yet.")
     
     st.markdown("---")
     
@@ -294,21 +385,24 @@ st.subheader("🔄 Visualization 3: Cross-Stock Performance Comparison")
 if all_prices and all_prices.get("data"):
     comparison_data = []
     
-    for stock_data in all_prices["data"]:
-        if stock_data and len(stock_data) > 0:
-            latest = stock_data[-1]
-            symbol = latest.get("symbol")
-            
-            # Get fused data for this symbol
-            fused = fetch_fused_data(symbol)
-            
-            comparison_data.append({
-                "Symbol": symbol,
-                "Price": latest.get("close"),
-                "Volume": latest.get("volume"),
-                "RSI": fused.get("indicator", {}).get("rsi14") if fused else None,
-                "Market Cap": fused.get("market_cap") if fused else None
-            })
+    for symbol_payload in all_prices["data"]:
+        symbol = symbol_payload.get("symbol")
+        current_candles = (symbol_payload.get("current_day") or {}).get("candles", []) or []
+        previous_candles = (symbol_payload.get("previous_day") or {}).get("candles", []) or []
+        
+        latest = current_candles[-1] if current_candles else (previous_candles[-1] if previous_candles else None)
+        if not latest or not symbol:
+            continue
+        
+        fused = fetch_fused_data(symbol)
+        
+        comparison_data.append({
+            "Symbol": symbol,
+            "Price": latest.get("close"),
+            "Volume": latest.get("volume"),
+            "RSI": fused.get("indicator", {}).get("rsi14") if fused else None,
+            "Market Cap": fused.get("market_cap") if fused else None
+        })
     
     if comparison_data:
         comp_df = pd.DataFrame(comparison_data)

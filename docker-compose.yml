@@ -51,6 +51,7 @@ services:
     environment:
       ANALYSIS_SERVICE_URL: "http://analysis-service:8003"
       PRICE_SERVICE_URL: "http://price-service:8001"
+      FUNDAMENTAL_SERVICE_URL: "http://fundamental-service:8002"
     networks:
       - stock-network
 
