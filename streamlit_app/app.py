@@ -30,6 +30,7 @@ selected_symbol = st.sidebar.selectbox("Select Stock Symbol", symbols)
 st.sidebar.header("Historical Data")
 history_limit = st.sidebar.slider("Data Points to Show", 10, 200, 50)
 
+
 # SMA configuration
 st.sidebar.header("Technical Indicators")
 sma_window = st.sidebar.slider(
@@ -62,7 +63,6 @@ def fetch_fused_data(symbol):
     except Exception as e:
         st.error(f"Connection error to analysis service: {str(e)}")
         return None
-
 @st.cache_data(ttl=30)
 def fetch_price_days(symbol):
     try:
@@ -126,8 +126,6 @@ def fetch_complete_history(symbol, limit=100):
     except Exception as e:
         print(f"Complete history error: {e}")
         return []
-
-
 def build_day_dataframe(day_data, window):
     candles = (day_data or {}).get("candles", []) or []
     if not candles:
@@ -170,7 +168,6 @@ price_days = fetch_price_days(selected_symbol)
 rsi_history = fetch_rsi_history(selected_symbol, history_limit)
 marketcap_history = fetch_marketcap_history(selected_symbol, history_limit)
 complete_history = fetch_complete_history(selected_symbol, history_limit)
-
 current_day_df = build_day_dataframe(price_days.get("current_day"), sma_window) if price_days else pd.DataFrame()
 previous_day_df = build_day_dataframe(price_days.get("previous_day"), sma_window) if price_days else pd.DataFrame()
 
@@ -196,7 +193,6 @@ elif not day_options:
     st.warning("No intraday price data is available yet for this symbol.")
 
 if data and data.get("price"):
-    
     chart_label = None
     chart_df = pd.DataFrame()
     if not selected_day_df.empty:
@@ -211,6 +207,8 @@ if data and data.get("price"):
     
     # Display key metrics at the top
     col1, col2, col3, col4, col5 = st.columns(5)
+    # Display key metrics at the top
+    col1, col2, col3, col4 = st.columns(4)
     
     latest_price = data.get("price")
     if latest_price:
@@ -256,6 +254,7 @@ if data and data.get("price"):
             subplot_titles=(f'{selected_symbol} Price Action ({chart_label})', 'Trading Volume')
         )
         
+        # Candlestick
         fig1.add_trace(
             go.Candlestick(
                 x=df['timestamp_local'],
@@ -268,6 +267,7 @@ if data and data.get("price"):
             row=1, col=1
         )
         
+        # Volume bars
         colors = ['red' if close < open else 'green' 
                   for close, open in zip(df['close'], df['open'])]
         fig1.add_trace(
@@ -280,7 +280,6 @@ if data and data.get("price"):
             ),
             row=2, col=1
         )
-        
         fig1.add_trace(
             go.Scatter(
                 x=df['timestamp_local'],
@@ -291,6 +290,7 @@ if data and data.get("price"):
             ),
             row=1, col=1
         )
+        
         
         fig1.update_layout(
             height=600,
@@ -308,7 +308,7 @@ if data and data.get("price"):
     st.markdown("---")
     
     # === VISUALIZATION 2: RSI Indicator with Historical Trend ===
-    st.subheader("📉 Visualization 2: RSI Technical Indicator Analysis")
+    st.subheader("Visualization 2: Relative Strength Index (RSI) Analysis")
     
     if rsi_history and len(rsi_history) > 0:
         # Create DataFrame from historical RSI
@@ -380,7 +380,7 @@ if data and data.get("price"):
     st.markdown("---")
     
     # === VISUALIZATION 3: Multi-Stock Comparison Dashboard ===
-st.subheader("🔄 Visualization 3: Cross-Stock Performance Comparison")
+st.subheader("Visualization 3: Cross-Stock Performance Comparison")
 
 if all_prices and all_prices.get("data"):
     comparison_data = []
@@ -393,9 +393,10 @@ if all_prices and all_prices.get("data"):
         latest = current_candles[-1] if current_candles else (previous_candles[-1] if previous_candles else None)
         if not latest or not symbol:
             continue
-        
+
+    # Fetch fused/analysis data
         fused = fetch_fused_data(symbol)
-        
+
         comparison_data.append({
             "Symbol": symbol,
             "Price": latest.get("close"),

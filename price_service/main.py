@@ -73,7 +73,7 @@ def init_db():
     
     conn.commit()
     conn.close()
-    print("✅ Database initialized")
+    print("Database initialized")
 
 
 def save_candle_to_db(candle):
@@ -174,7 +174,7 @@ def get_market_status():
 # ---------------------------------------------------------
 def backfill_day(symbol: str, target_day: dt_date):
     """Backfill all 5m candles for the given day (Central Time)."""
-    print(f"🔄 Backfilling {symbol} for {target_day.isoformat()}...")
+    print(f"Backfilling {symbol} for {target_day.isoformat()}...")
     
     try:
         start = target_day.strftime("%Y-%m-%d")
@@ -234,7 +234,7 @@ def backfill_day(symbol: str, target_day: dt_date):
             save_candle_to_db(candle)
             count += 1
         
-        print(f"✅ [{symbol}] Backfilled {count} candles for {target_day}")
+        print(f"[{symbol}] Backfilled {count} candles for {target_day}")
         return count
         
     except Exception as e:
@@ -331,7 +331,7 @@ def is_data_complete_for_today(symbol: str, today: dt_date):
 
 def initial_fetch():
     """Load today's and previous day's data for all symbols"""
-    print("📊 Initializing price data...")
+    print("Initializing price data...")
     
     today = get_ct_today()
     prev_day = get_previous_trading_day(today)
@@ -364,7 +364,7 @@ def initial_fetch():
         # Set last timestamp from today's data
         if todays_candles:
             LAST_TIMESTAMP[sym] = datetime.fromisoformat(todays_candles[-1]["timestamp_utc"])
-            print(f"[{sym}] ✅ Loaded {len(todays_candles)} candles for today, {len(prev_candles)} for previous day")
+            print(f"[{sym}] Loaded {len(todays_candles)} candles for today, {len(prev_candles)} for previous day")
         else:
             print(f"[{sym}] No data available for today yet")
 
@@ -374,7 +374,7 @@ def initial_fetch():
 # ---------------------------------------------------------
 def smart_polling_loop():
     """Continuously check for new 5-minute candles during market hours"""
-    print("🔄 Smart polling thread started...")
+    print("Smart polling thread started...")
 
     while True:
         now_ct = datetime.now(CENTRAL_TZ)
@@ -457,7 +457,7 @@ def smart_polling_loop():
 # ---------------------------------------------------------
 def cleanup_old_data():
     """Remove data older than previous trading day at midnight"""
-    print("🧹 Cleanup thread started...")
+    print("Cleanup thread started...")
     
     while True:
         now_ct = datetime.now(CENTRAL_TZ)
@@ -468,7 +468,7 @@ def cleanup_old_data():
         )
         sleep_seconds = (next_midnight - now_ct).total_seconds()
         
-        print(f"⏰ Next cleanup at {next_midnight.strftime('%Y-%m-%d %I:%M %p %Z')}")
+        print(f"Next cleanup at {next_midnight.strftime('%Y-%m-%d %I:%M %p %Z')}")
         time.sleep(sleep_seconds)
         
         # It's now past midnight - cleanup old data
@@ -480,7 +480,7 @@ def cleanup_old_data():
         cutoff_datetime = datetime.combine(cutoff_date, datetime.min.time(), tzinfo=CENTRAL_TZ)
         cutoff_utc = cutoff_datetime.astimezone(timezone.utc).isoformat()
         
-        print(f"\n🗑️  Cleaning up data older than {cutoff_date.isoformat()}...")
+        print(f"\nCleaning up data older than {cutoff_date.isoformat()}...")
         
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -499,14 +499,14 @@ def cleanup_old_data():
                 WHERE timestamp_utc < ?
             """, (cutoff_utc,))
             conn.commit()
-            print(f"✅ Deleted {count} old candle records")
+            print(f"Deleted {count} old candle records")
         else:
-            print("✅ No old data to clean up")
+            print("No old data to clean up")
         
         conn.close()
         
         # Refresh cache with current data
-        print("🔄 Refreshing cache after cleanup...")
+        print("Refreshing cache after cleanup...")
         for sym in DEFAULT_TICKERS:
             today_candles = load_candles_for_day(sym, today)
             prev_candles = load_candles_for_day(sym, previous)
