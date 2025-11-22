@@ -26,6 +26,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS rsi_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol TEXT NOT NULL,
+            closing_price REAL NOT NULL,          -- Closing price for the day
+    
             rsi_value REAL NOT NULL,
             timestamp TEXT NOT NULL,
             UNIQUE(symbol, timestamp)
@@ -43,23 +45,8 @@ def init_db():
         )
     """)
     
-    # Table for fused data snapshots
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS fused_snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            price REAL,
-            volume INTEGER,
-            rsi REAL,
-            market_cap INTEGER,
-            timestamp TEXT NOT NULL,
-            UNIQUE(symbol, timestamp)
-        )
-    """)
-    
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_rsi_symbol ON rsi_history(symbol, timestamp DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_mcap_symbol ON market_cap_history(symbol, timestamp DESC)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fused_symbol ON fused_snapshots(symbol, timestamp DESC)")
     
     conn.commit()
     conn.close()
@@ -112,27 +99,6 @@ def save_market_cap_to_db(symbol, market_cap, timestamp=None):
         conn.close()
 
 
-def save_fused_snapshot(symbol, price, volume, rsi, market_cap, timestamp=None):
-    """Save complete fused data snapshot"""
-    if timestamp is None:
-        timestamp = datetime.now(timezone.utc).isoformat()
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            INSERT OR REPLACE INTO fused_snapshots 
-            (symbol, price, volume, rsi, market_cap, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (symbol, price, volume, rsi, market_cap, timestamp))
-        conn.commit()
-    except Exception as e:
-        print(f"Error saving fused snapshot: {e}")
-    finally:
-        conn.close()
-
-
 def get_rsi_history(symbol, limit=100):
     """Get RSI history from database"""
     conn = sqlite3.connect(DB_PATH)
@@ -169,31 +135,6 @@ def get_market_cap_history(symbol, limit=100):
     conn.close()
     
     return [{"market_cap": row[0], "timestamp": row[1]} for row in reversed(rows)]
-
-
-def get_fused_history(symbol, limit=100):
-    """Get complete fused data history"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT price, volume, rsi, market_cap, timestamp
-        FROM fused_snapshots
-        WHERE symbol = ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-    """, (symbol, limit))
-    
-    rows = cursor.fetchall()
-    conn.close()
-    
-    return [{
-        "price": row[0],
-        "volume": row[1],
-        "rsi": row[2],
-        "market_cap": row[3],
-        "timestamp": row[4]
-    } for row in reversed(rows)]
 
 
 # Initialize database on import
@@ -273,7 +214,7 @@ def get_fused_data(symbol: str):
         errors.append(f"RSI error: {str(e)}")
         print(f"RSI error: {e}")
 
-    # Save complete snapshot
+    # Get latest price for response
     latest_price = None
     if price_data:
         current_day = price_data.get("current_day", {}) or {}
@@ -286,16 +227,6 @@ def get_fused_data(symbol: str):
         elif previous_candles:
             latest_price = previous_candles[-1]
 
-    if latest_price:
-        save_fused_snapshot(
-            symbol,
-            latest_price.get("close"),
-            latest_price.get("volume"),
-            rsi_value,
-            market_cap,
-            timestamp
-        )
-
     return {
         "symbol": symbol,
         "price": latest_price,
@@ -307,3 +238,137 @@ def get_fused_data(symbol: str):
         },
         "errors": errors if errors else None
     }
+
+def save_daily_rsi(symbol: str, trading_date, rsi_value: float):
+    """Save one RSI value for the entire trading day"""
+    if rsi_value is None:
+        return
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Create table if it doesn't exist
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_rsi (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            trading_date DATE NOT NULL,
+            rsi_value REAL NOT NULL,
+            calculated_at TEXT NOT NULL,
+            UNIQUE(symbol, trading_date)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_daily_rsi_lookup 
+        ON daily_rsi(symbol, trading_date DESC)
+    """)
+    
+    try:
+        cursor.execute("""
+            INSERT OR REPLACE INTO daily_rsi 
+            (symbol, trading_date, rsi_value, calculated_at)
+            VALUES (?, ?, ?, ?)
+        """, (
+            symbol,
+            trading_date if isinstance(trading_date, str) else trading_date.isoformat(),
+            rsi_value,
+            datetime.now(timezone.utc).isoformat()
+        ))
+        conn.commit()
+        print(f"✅ Saved daily RSI: {symbol} {trading_date} = {rsi_value}")
+    except Exception as e:
+        print(f"❌ Error saving daily RSI: {e}")
+    finally:
+        conn.close()
+
+def calculate_and_save_daily_rsi(symbol: str, trading_date):
+    """
+    Calculate RSI for a full trading day and save it
+    
+    Args:
+        symbol: Stock ticker (e.g., "AAPL")
+        trading_date: Date string "YYYY-MM-DD" or date object
+    """
+    symbol = symbol.upper()
+    
+    # Convert to string if date object
+    date_str = trading_date if isinstance(trading_date, str) else trading_date.isoformat()
+    
+    print(f"\n📊 Calculating daily RSI for {symbol} on {date_str}...")
+    
+    try:
+        # Get all candles for this specific day from Price Service
+        price_resp = requests.get(f"{PRICE_SERVICE_URL}/prices/{symbol}", timeout=10)
+        
+        if price_resp.status_code != 200:
+            print(f"❌ Failed to fetch price data: {price_resp.status_code}")
+            return None
+        
+        data = price_resp.json()
+        
+        # Check which day's data matches our target date
+        current_day = data.get("current_day", {})
+        previous_day = data.get("previous_day", {})
+        
+        candles = []
+        if current_day.get("date") == date_str:
+            candles = current_day.get("candles", [])
+        elif previous_day.get("date") == date_str:
+            candles = previous_day.get("candles", [])
+        else:
+            print(f"⚠️  Date {date_str} not found in available data")
+            return None
+        
+        if len(candles) < 15:
+            print(f"⚠️  Not enough candles ({len(candles)}) for RSI calculation")
+            return None
+        
+        # Sort candles chronologically
+        candles_sorted = sorted(candles, key=lambda x: x["timestamp_utc"])
+        
+        # Extract closing prices
+        closes = [c["close"] for c in candles_sorted]
+        
+        # Calculate RSI using all day's data
+        rsi_value = compute_rsi(closes, period=14)
+        
+        if rsi_value is None:
+            print(f"❌ RSI calculation returned None")
+            return None
+        
+        # Save to database
+        save_daily_rsi(symbol, date_str, rsi_value)
+        
+        print(f"✅ {symbol} {date_str}: RSI = {rsi_value:.2f} (from {len(candles)} candles)")
+        return rsi_value
+        
+    except Exception as e:
+        print(f"❌ Error calculating daily RSI: {e}")
+        return None
+
+def get_daily_rsi_history(symbol: str, limit: int = 100):
+    """Get historical daily RSI values"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT trading_date, rsi_value, calculated_at
+        FROM daily_rsi
+        WHERE symbol = ?
+        ORDER BY trading_date DESC
+        LIMIT ?
+    """, (symbol.upper(), limit))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    # Return in chronological order (oldest first)
+    return [
+        {
+            "date": row[0],
+            "rsi": row[1],
+            "calculated_at": row[2]
+        }
+        for row in reversed(rows)
+    ]

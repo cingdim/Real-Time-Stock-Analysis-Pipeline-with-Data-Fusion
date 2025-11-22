@@ -26,11 +26,6 @@ st.sidebar.header("Stock Selection")
 symbols = ["AAPL", "AMZN", "META", "NVDA", "TSLA"]
 selected_symbol = st.sidebar.selectbox("Select Stock Symbol", symbols)
 
-# Historical data range
-st.sidebar.header("Historical Data")
-history_limit = st.sidebar.slider("Data Points to Show", 10, 200, 50)
-
-
 # SMA configuration
 st.sidebar.header("Technical Indicators")
 sma_window = st.sidebar.slider(
@@ -39,6 +34,15 @@ sma_window = st.sidebar.slider(
     max_value=60,
     value=14,
     help="Number of recent candles used when computing the simple moving average."
+)
+
+# Historical data range for correlation
+correlation_limit = st.sidebar.slider(
+    "Correlation Data Points",
+    min_value=20,
+    max_value=200,
+    value=100,
+    help="Number of market cap snapshots to use for correlation analysis"
 )
 
 # Refresh button
@@ -63,6 +67,7 @@ def fetch_fused_data(symbol):
     except Exception as e:
         st.error(f"Connection error to analysis service: {str(e)}")
         return None
+
 @st.cache_data(ttl=30)
 def fetch_price_days(symbol):
     try:
@@ -92,18 +97,6 @@ def fetch_all_prices():
         return None
 
 @st.cache_data(ttl=30)
-def fetch_rsi_history(symbol, limit=100):
-    try:
-        url = f"{ANALYSIS_SERVICE_URL}/rsi/history/{symbol}?limit={limit}"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.json().get("history", [])
-        return []
-    except Exception as e:
-        print(f"RSI history error: {e}")
-        return []
-
-@st.cache_data(ttl=30)
 def fetch_marketcap_history(symbol, limit=100):
     try:
         url = f"{ANALYSIS_SERVICE_URL}/marketcap/history/{symbol}?limit={limit}"
@@ -115,17 +108,6 @@ def fetch_marketcap_history(symbol, limit=100):
         print(f"Market cap history error: {e}")
         return []
 
-@st.cache_data(ttl=30)
-def fetch_complete_history(symbol, limit=100):
-    try:
-        url = f"{ANALYSIS_SERVICE_URL}/history/{symbol}?limit={limit}"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.json().get("history", [])
-        return []
-    except Exception as e:
-        print(f"Complete history error: {e}")
-        return []
 def build_day_dataframe(day_data, window):
     candles = (day_data or {}).get("candles", []) or []
     if not candles:
@@ -165,9 +147,8 @@ except Exception as e:
 data = fetch_fused_data(selected_symbol)
 all_prices = fetch_all_prices()
 price_days = fetch_price_days(selected_symbol)
-rsi_history = fetch_rsi_history(selected_symbol, history_limit)
-marketcap_history = fetch_marketcap_history(selected_symbol, history_limit)
-complete_history = fetch_complete_history(selected_symbol, history_limit)
+marketcap_history = fetch_marketcap_history(selected_symbol, correlation_limit)
+
 current_day_df = build_day_dataframe(price_days.get("current_day"), sma_window) if price_days else pd.DataFrame()
 previous_day_df = build_day_dataframe(price_days.get("previous_day"), sma_window) if price_days else pd.DataFrame()
 
@@ -206,8 +187,6 @@ if data and data.get("price"):
         chart_label = "Previous Day"
     
     # Display key metrics at the top
-    col1, col2, col3, col4, col5 = st.columns(5)
-    # Display key metrics at the top
     col1, col2, col3, col4 = st.columns(4)
     
     latest_price = data.get("price")
@@ -217,15 +196,12 @@ if data and data.get("price"):
         with col2:
             st.metric("Volume", f"{latest_price['volume']:,}")
         with col3:
-            rsi = data.get("indicator", {}).get("rsi14")
-            st.metric("RSI (14)", f"{rsi:.2f}" if rsi else "N/A")
-        with col4:
             market_cap = data.get("market_cap")
             if market_cap:
                 st.metric("Market Cap", f"${market_cap/1e9:.2f}B")
             else:
                 st.metric("Market Cap", "N/A")
-        with col5:
+        with col4:
             if not chart_df.empty and 'SMA' in chart_df:
                 latest_sma = chart_df['SMA'].iloc[-1]
                 if pd.notna(latest_sma):
@@ -267,6 +243,18 @@ if data and data.get("price"):
             row=1, col=1
         )
         
+        # SMA line
+        fig1.add_trace(
+            go.Scatter(
+                x=df['timestamp_local'],
+                y=df['SMA'],
+                mode='lines',
+                name=f"SMA ({sma_window})",
+                line=dict(color='orange', width=2)
+            ),
+            row=1, col=1
+        )
+        
         # Volume bars
         colors = ['red' if close < open else 'green' 
                   for close, open in zip(df['close'], df['open'])]
@@ -280,17 +268,6 @@ if data and data.get("price"):
             ),
             row=2, col=1
         )
-        fig1.add_trace(
-            go.Scatter(
-                x=df['timestamp_local'],
-                y=df['SMA'],
-                mode='lines',
-                name=f"SMA ({sma_window})",
-                line=dict(color='orange', width=2)
-            ),
-            row=1, col=1
-        )
-        
         
         fig1.update_layout(
             height=600,
@@ -307,237 +284,192 @@ if data and data.get("price"):
     
     st.markdown("---")
     
-    # === VISUALIZATION 2: RSI Indicator with Historical Trend ===
-    st.subheader("Visualization 2: Relative Strength Index (RSI) Analysis")
+    # === VISUALIZATION 2: Market Cap History ===
+    st.subheader("📊 Visualization 2: Market Cap Tracking")
     
-    if rsi_history and len(rsi_history) > 0:
-        # Create DataFrame from historical RSI
-        rsi_df = pd.DataFrame(rsi_history)
-        rsi_df['timestamp'] = pd.to_datetime(rsi_df['timestamp'])
+    if marketcap_history and len(marketcap_history) > 5:
+        mcap_df = pd.DataFrame(marketcap_history)
+        mcap_df['timestamp'] = pd.to_datetime(mcap_df['timestamp'])
+        mcap_df['market_cap_billions'] = mcap_df['market_cap'] / 1e9
         
+        # Create market cap chart
         fig2 = go.Figure()
         
-        # RSI Line
-        fig2.add_trace(go.Scatter(
-            x=rsi_df['timestamp'],
-            y=rsi_df['rsi'],
-            mode='lines+markers',
-            name='RSI (14)',
-            line=dict(color='blue', width=2),
-            marker=dict(size=4)
-        ))
+        # Market cap line
+        fig2.add_trace(
+            go.Scatter(
+                x=mcap_df['timestamp'],
+                y=mcap_df['market_cap_billions'],
+                mode='lines+markers',
+                name='Market Cap',
+                line=dict(color='green', width=3),
+                marker=dict(size=6),
+                hovertemplate='<b>Market Cap:</b> $%{y:.2f}B<extra></extra>'
+            )
+        )
         
-        # Overbought line (70)
-        fig2.add_hline(y=70, line_dash="dash", line_color="red", 
-                       annotation_text="Overbought (70)")
-        
-        # Oversold line (30)
-        fig2.add_hline(y=30, line_dash="dash", line_color="green", 
-                       annotation_text="Oversold (30)")
-        
-        # Neutral line (50)
-        fig2.add_hline(y=50, line_dash="dot", line_color="gray", 
-                       annotation_text="Neutral (50)")
-        
-        # Color zones
-        fig2.add_hrect(y0=70, y1=100, fillcolor="red", opacity=0.1, 
-                       annotation_text="Overbought Zone", annotation_position="top left")
-        fig2.add_hrect(y0=0, y1=30, fillcolor="green", opacity=0.1, 
-                       annotation_text="Oversold Zone", annotation_position="bottom left")
+        fig2.update_xaxes(title_text="Time")
+        fig2.update_yaxes(title_text="<b>Market Cap ($ Billions)</b>", title_font=dict(color='green'))
         
         fig2.update_layout(
-            title=f"{selected_symbol} RSI Momentum Indicator - Historical Trend",
-            xaxis_title="Time",
-            yaxis_title="RSI Value",
-            height=400,
-            hovermode='x unified',
-            yaxis=dict(range=[0, 100])
+            title=f"{selected_symbol} Market Cap History",
+            height=450,
+            hovermode='x unified'
         )
         
         st.plotly_chart(fig2, use_container_width=True)
         
-        # RSI Statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Current RSI", f"{rsi_df['rsi'].iloc[-1]:.2f}")
-        with col2:
-            st.metric("Average RSI", f"{rsi_df['rsi'].mean():.2f}")
-        with col3:
-            st.metric("RSI Range", f"{rsi_df['rsi'].min():.2f} - {rsi_df['rsi'].max():.2f}")
+        # Calculate statistics
+        if len(mcap_df) > 1:
+            # Market cap change
+            mcap_change = mcap_df['market_cap'].iloc[-1] - mcap_df['market_cap'].iloc[0]
+            mcap_change_pct = (mcap_change / mcap_df['market_cap'].iloc[0]) * 100
+            
+            # Display metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Current Market Cap", f"${mcap_df['market_cap_billions'].iloc[-1]:.2f}B")
+            
+            with col2:
+                st.metric("Change", f"${mcap_change/1e9:+.2f}B", f"{mcap_change_pct:+.2f}%")
+            
+            with col3:
+                st.metric("Average", f"${mcap_df['market_cap_billions'].mean():.2f}B")
+            
+            with col4:
+                st.metric("Data Points", len(mcap_df))
         
-        # RSI Interpretation
-        current_rsi = data.get("indicator", {}).get("rsi14")
-        if current_rsi:
-            if current_rsi > 70:
-                st.warning(f"⚠️ **Overbought Signal**: RSI is {current_rsi:.2f} - Stock may be overvalued")
-            elif current_rsi < 30:
-                st.success(f"✅ **Oversold Signal**: RSI is {current_rsi:.2f} - Potential buying opportunity")
-            else:
-                st.info(f"ℹ️ **Neutral**: RSI is {current_rsi:.2f} - No strong signal")
     else:
-        st.warning("Not enough RSI history data available")
+        st.info("""
+        📊 **Collecting Market Cap Data...**
+        
+        This visualization requires at least 5 market cap snapshots to display trends.
+        
+        Market cap data is fetched from the Fundamental Service and stored over time,
+        allowing us to track the company's valuation changes.
+        
+        Keep the dashboard running to accumulate data points for analysis.
+        """)
     
     st.markdown("---")
     
     # === VISUALIZATION 3: Multi-Stock Comparison Dashboard ===
-st.subheader("Visualization 3: Cross-Stock Performance Comparison")
+    st.subheader("📊 Visualization 3: Cross-Stock Performance Comparison")
 
-if all_prices and all_prices.get("data"):
-    comparison_data = []
-    
-    for symbol_payload in all_prices["data"]:
-        symbol = symbol_payload.get("symbol")
-        current_candles = (symbol_payload.get("current_day") or {}).get("candles", []) or []
-        previous_candles = (symbol_payload.get("previous_day") or {}).get("candles", []) or []
+    if all_prices and all_prices.get("data"):
+        comparison_data = []
         
-        latest = current_candles[-1] if current_candles else (previous_candles[-1] if previous_candles else None)
-        if not latest or not symbol:
-            continue
+        for symbol_payload in all_prices["data"]:
+            symbol = symbol_payload.get("symbol")
+            current_candles = (symbol_payload.get("current_day") or {}).get("candles", []) or []
+            previous_candles = (symbol_payload.get("previous_day") or {}).get("candles", []) or []
+            
+            latest = current_candles[-1] if current_candles else (previous_candles[-1] if previous_candles else None)
+            if not latest or not symbol:
+                continue
 
-    # Fetch fused/analysis data
-        fused = fetch_fused_data(symbol)
+            # Fetch fused/analysis data
+            fused = fetch_fused_data(symbol)
 
-        comparison_data.append({
-            "Symbol": symbol,
-            "Price": latest.get("close"),
-            "Volume": latest.get("volume"),
-            "RSI": fused.get("indicator", {}).get("rsi14") if fused else None,
-            "Market Cap": fused.get("market_cap") if fused else None
-        })
-    
-    if comparison_data:
-        comp_df = pd.DataFrame(comparison_data)
+            comparison_data.append({
+                "Symbol": symbol,
+                "Price": latest.get("close"),
+                "Volume": latest.get("volume"),
+                "Market Cap": fused.get("market_cap") if fused else None
+            })
         
-        # Create 2x2 subplot
-        fig3 = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=(
-                'Current Stock Prices',
-                'Trading Volume Comparison',
-                'RSI Comparison',
-                'Market Capitalization'
-            ),
-            specs=[[{'type': 'bar'}, {'type': 'bar'}],
-                   [{'type': 'bar'}, {'type': 'bar'}]]
-        )
-        
-        # Price comparison
-        fig3.add_trace(
-            go.Bar(
-                x=comp_df['Symbol'],
-                y=comp_df['Price'],
-                name='Price',
-                marker_color='lightblue',
-                text=[f"{p:.2f}" for p in comp_df['Price']],
-                textposition='auto'
-            ),
-            row=1, col=1
-        )
-        
-        # Volume comparison
-        fig3.add_trace(
-            go.Bar(
-                x=comp_df['Symbol'],
-                y=comp_df['Volume'],
-                name='Volume',
-                marker_color='lightgreen',
-                text=comp_df['Volume'],
-                textposition='auto'
-            ),
-            row=1, col=2
-        )
-        
-        # RSI comparison with None handling
-        rsi_values = []
-        rsi_colors = []
-        rsi_text = []
-        
-        for rsi in comp_df['RSI']:
-            if rsi is not None:
-                rsi_values.append(rsi)
-                rsi_text.append(f"{rsi:.2f}")
-                if rsi > 70:
-                    rsi_colors.append('red')
-                elif rsi < 30:
-                    rsi_colors.append('green')
+        if comparison_data:
+            comp_df = pd.DataFrame(comparison_data)
+            
+            # Create 1x3 subplot
+            fig3 = make_subplots(
+                rows=1, cols=3,
+                subplot_titles=(
+                    'Current Stock Prices',
+                    'Trading Volume Comparison',
+                    'Market Capitalization'
+                ),
+                specs=[[{'type': 'bar'}, {'type': 'bar'}, {'type': 'bar'}]]
+            )
+            
+            # Price comparison
+            fig3.add_trace(
+                go.Bar(
+                    x=comp_df['Symbol'],
+                    y=comp_df['Price'],
+                    name='Price',
+                    marker_color='lightblue',
+                    text=[f"${p:.2f}" for p in comp_df['Price']],
+                    textposition='auto'
+                ),
+                row=1, col=1
+            )
+            
+            # Volume comparison
+            fig3.add_trace(
+                go.Bar(
+                    x=comp_df['Symbol'],
+                    y=comp_df['Volume'],
+                    name='Volume',
+                    marker_color='lightgreen',
+                    text=comp_df['Volume'],
+                    textposition='auto'
+                ),
+                row=1, col=2
+            )
+            
+            # Market Cap comparison with None handling
+            market_caps_billions = []
+            mcap_text = []
+            
+            for mcap in comp_df['Market Cap']:
+                if mcap is not None:
+                    market_caps_billions.append(mcap / 1e9)
+                    mcap_text.append(f"{mcap/1e9:.2f}")
                 else:
-                    rsi_colors.append('gray')
-            else:
-                rsi_values.append(0)
-                rsi_text.append('N/A')
-                rsi_colors.append('lightgray')
-        
-        fig3.add_trace(
-            go.Bar(
-                x=comp_df['Symbol'],
-                y=rsi_values,
-                name='RSI',
-                marker_color=rsi_colors,
-                text=rsi_text,
-                textposition='auto'
-            ),
-            row=2, col=1
-        )
-        
-        # Market Cap comparison with None handling
-        market_caps_billions = []
-        mcap_text = []
-        
-        for mcap in comp_df['Market Cap']:
-            if mcap is not None:
-                market_caps_billions.append(mcap / 1e9)
-                mcap_text.append(f"{mcap/1e9:.2f}")
-            else:
-                market_caps_billions.append(0)
-                mcap_text.append('N/A')
-        
-        fig3.add_trace(
-            go.Bar(
-                x=comp_df['Symbol'],
-                y=market_caps_billions,
-                name='Market Cap',
-                marker_color='coral',
-                text=mcap_text,
-                textposition='auto'
-            ),
-            row=2, col=2
-        )
-        
-        fig3.update_xaxes(title_text="Stock Symbol", row=1, col=1)
-        fig3.update_xaxes(title_text="Stock Symbol", row=1, col=2)
-        fig3.update_xaxes(title_text="Stock Symbol", row=2, col=1)
-        fig3.update_xaxes(title_text="Stock Symbol", row=2, col=2)
-        
-        fig3.update_yaxes(title_text="Price ($)", row=1, col=1)
-        fig3.update_yaxes(title_text="Volume", row=1, col=2)
-        fig3.update_yaxes(title_text="RSI Value", row=2, col=1)
-        fig3.update_yaxes(title_text="Market Cap ($B)", row=2, col=2)
-        
-        fig3.update_layout(
-            height=700,
-            showlegend=False,
-            title_text="Multi-Stock Performance Dashboard"
-        )
-        
-        st.plotly_chart(fig3, width='stretch')  # Fixed deprecation warning
-        
-        # Data table - handle None values
-        st.subheader("📋 Detailed Comparison Table")
-        display_df = comp_df.copy()
-        
-        # Format Market Cap, handle None
-        display_df['Market Cap'] = display_df['Market Cap'].apply(
-            lambda x: f"{x/1e9:.2f}" if x is not None else 'N/A'
-        )
-        
-        # Format RSI, handle None
-        display_df['RSI'] = display_df['RSI'].apply(
-            lambda x: f"{x:.2f}" if x is not None else 'N/A'
-        )
-        
-        display_df.columns = ['Symbol', 'Price ($)', 'Volume', 'RSI', 'Market Cap ($B)']
-        st.dataframe(display_df, width='stretch')  # Fixed deprecation warning
-    
+                    market_caps_billions.append(0)
+                    mcap_text.append('N/A')
+            
+            fig3.add_trace(
+                go.Bar(
+                    x=comp_df['Symbol'],
+                    y=market_caps_billions,
+                    name='Market Cap',
+                    marker_color='coral',
+                    text=mcap_text,
+                    textposition='auto'
+                ),
+                row=1, col=3
+            )
+            
+            fig3.update_xaxes(title_text="Stock Symbol", row=1, col=1)
+            fig3.update_xaxes(title_text="Stock Symbol", row=1, col=2)
+            fig3.update_xaxes(title_text="Stock Symbol", row=1, col=3)
+            
+            fig3.update_yaxes(title_text="Price ($)", row=1, col=1)
+            fig3.update_yaxes(title_text="Volume", row=1, col=2)
+            fig3.update_yaxes(title_text="Market Cap ($B)", row=1, col=3)
+            
+            fig3.update_layout(
+                height=500,
+                showlegend=False,
+                title_text="Multi-Stock Performance Dashboard"
+            )
+            
+            st.plotly_chart(fig3, use_container_width=True)
+            
+            # Data table - handle None values
+            st.subheader("📋 Detailed Comparison Table")
+            display_df = comp_df.copy()
+            
+            # Format Market Cap, handle None
+            display_df['Market Cap'] = display_df['Market Cap'].apply(
+                lambda x: f"{x/1e9:.2f}" if x is not None else 'N/A'
+            )
+            
+            display_df.columns = ['Symbol', 'Price ($)', 'Volume', 'Market Cap ($B)']
+            st.dataframe(display_df, use_container_width=True)
 
 # Footer
 st.markdown("---")
