@@ -9,7 +9,7 @@ def root():
 
 @app.get("/fused/{symbol}")
 def fused(symbol: str):
-    """Get fused data (price + market cap + RSI)"""
+    """Get fused data (price + market cap)"""
     return get_fused_data(symbol)
 
 @app.get("/marketcap/history/{symbol}")
