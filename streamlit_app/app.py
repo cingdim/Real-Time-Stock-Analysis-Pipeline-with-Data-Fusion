@@ -46,7 +46,7 @@ correlation_limit = st.sidebar.slider(
 )
 
 # Refresh button
-if st.sidebar.button("🔄 Refresh Data"):
+if st.sidebar.button("Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
@@ -120,27 +120,27 @@ def build_day_dataframe(day_data, window):
     return df
 
 # Service health check
-st.sidebar.subheader("🏥 Service Status")
+st.sidebar.subheader("Service Status")
 
 try:
     health_url = f"{ANALYSIS_SERVICE_URL}/health"
     response = requests.get(health_url, timeout=5)
     if response.status_code == 200:
-        st.sidebar.success("✅ Analysis Service")
+        st.sidebar.success("Analysis Service")
     else:
-        st.sidebar.error(f"❌ Analysis Service ({response.status_code})")
+        st.sidebar.error(f"Analysis Service ({response.status_code})")
 except Exception as e:
-    st.sidebar.error(f"❌ Analysis Service: {str(e)}")
+    st.sidebar.error(f"Analysis Service: {str(e)}")
 
 try:
     health_url = f"{PRICE_SERVICE_URL}/health"
     response = requests.get(health_url, timeout=5)
     if response.status_code == 200:
-        st.sidebar.success("✅ Price Service")
+        st.sidebar.success("Price Service")
     else:
-        st.sidebar.error(f"❌ Price Service ({response.status_code})")
+        st.sidebar.error(f"Price Service ({response.status_code})")
 except Exception as e:
-    st.sidebar.error(f"❌ Price Service: {str(e)}")
+    st.sidebar.error(f"Price Service: {str(e)}")
 
 
 # Get data
@@ -214,7 +214,7 @@ if data and data.get("price"):
     st.markdown("---")
     
     # === VISUALIZATION 1: Price History with Candlestick Chart ===
-    st.subheader("📊 Visualization 1: Price Movement & Volume Analysis")
+    st.subheader("Visualization 1: Price Movement & Volume Analysis")
     
     if price_days and price_days.get("market_status") == "closed" and not current_day_df.empty:
         st.info("Market is closed. Showing the full set of today's candles.")
@@ -285,7 +285,7 @@ if data and data.get("price"):
     st.markdown("---")
     
     # === VISUALIZATION 2: Market Cap History ===
-    st.subheader("📊 Visualization 2: Market Cap Tracking")
+    st.subheader("Visualization 2: Market Cap Tracking")
     
     if marketcap_history and len(marketcap_history) > 5:
         mcap_df = pd.DataFrame(marketcap_history)
@@ -342,7 +342,7 @@ if data and data.get("price"):
         
     else:
         st.info("""
-        📊 **Collecting Market Cap Data...**
+        **Collecting Market Cap Data...**
         
         This visualization requires at least 5 market cap snapshots to display trends.
         
@@ -355,7 +355,7 @@ if data and data.get("price"):
     st.markdown("---")
     
     # === VISUALIZATION 3: Multi-Stock Comparison Dashboard ===
-    st.subheader("📊 Visualization 3: Cross-Stock Performance Comparison")
+    st.subheader("Visualization 3: Cross-Stock Performance Comparison")
 
     if all_prices and all_prices.get("data"):
         comparison_data = []

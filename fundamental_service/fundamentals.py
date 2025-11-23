@@ -37,7 +37,7 @@ async def auto_update_market_caps():
             stock = yf.Ticker(t)
             cap = stock.info.get("marketCap")
             CACHE[t] = (dt.datetime.now(), cap)
-            print(f"✅ Updated {t}: {cap}")
+            print(f"Updated {t}: {cap}")
         await asyncio.sleep(900)
 
 
